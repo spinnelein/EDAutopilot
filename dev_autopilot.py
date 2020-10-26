@@ -1276,7 +1276,8 @@ def refuel(refuel_threshold=33):
     print("Star Class " + ship()['star_class'])
     send(keys['SetSpeedZero'], repeat=3)
 
-    #if ship()['fuel_percent'] < refuel_threshold and ship()['star_class'] in scoopable_stars:
+    if ship()['fuel_percent'] < 5 ship()['star_class'] not in scoopable_stars:
+        quit()
     if ship()['star_class'] in scoopable_stars:
         logging.debug('refuel= start refuel')
         if ship()['is_scooping']:
@@ -1438,7 +1439,7 @@ def autopilot():
                 position(refueled_multiplier=2)
     send(keys['SetSpeedZero'])
     logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT END '+181*'-'+'\n'+200*'-')
-    #quit()
+    quit()
 
 
 # In[237]:
