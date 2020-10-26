@@ -27,10 +27,11 @@
 
 import sys
 import datetime
-from os import environ, listdir
+import np
+from os import environ, listdir, system
 from os.path import join, isfile, getmtime, abspath
 from json import loads
-from math import degrees, atan
+from math import degrees, atan, sqrt
 from random import random
 from time import sleep
 from numpy import array, sum, where
@@ -108,6 +109,8 @@ KEY_REPEAT_DELAY = 0.100
 FUNCTION_DEFAULT_DELAY = 0.500
 SCREEN_WIDTH, SCREEN_HEIGHT = size()
 
+
+
 logging.info('RELEASE='+str(RELEASE))
 logging.info('PATH_LOG_FILES='+str(PATH_LOG_FILES))
 logging.info('PATH_KEYBINDINGS='+str(PATH_KEYBINDINGS))
@@ -149,6 +152,7 @@ logging.info('get_latest_log='+str(get_latest_log(PATH_LOG_FILES)))
 
 
 def ship():
+
     """Returns a 'status' dict containing relevant game status information (state, fuel, ...)"""
     latest_log = get_latest_log(PATH_LOG_FILES)
     ship = {
@@ -160,10 +164,20 @@ def ship():
         'target': None,
         'fuel_capacity': None,
         'fuel_level': None,
+        'jumps_remaining': None,
         'fuel_percent': None,
         'is_scooping': False,
+        'guifocus': 0,
     }
     # Read log line by line and parse data
+    status = environ['USERPROFILE'] + "\Saved Games\Frontier Developments\Elite Dangerous\status.json"
+    with open(status, encoding="utf-8") as f:
+        line = f.readline()
+        try:
+            status = loads(line)
+            guifocus = status['GuiFocus']
+        except:
+            pass
     with open(latest_log, encoding="utf-8") as f:
         for line in f:
             log = loads(line)
@@ -175,6 +189,9 @@ def ship():
                 
                 if log_event == 'StartJump':
                     ship['status'] = str('starting_'+log['JumpType']).lower()
+                 
+                elif log_event == 'HeatWarning':
+                    ship['status'] = 'danger'
                     
                 elif log_event == 'SupercruiseEntry' or log_event == 'FSDJump':
                     ship['status'] = 'in_supercruise'
@@ -224,13 +241,18 @@ def ship():
                     ship['is_scooping'] = False
                     
                 # parse location
-                if (log_event == 'Location' or log_event == 'FSDJump') and 'StarSystem' in log:
+                if (log_event == 'Location' or log_event == 'FSDJump' or log_event == 'StartJump') and 'StarSystem' in log:
                     ship['location'] = log['StarSystem']
-                if 'StarClass' in log:
-                    ship['star_class'] = log['StarClass']
+                    if 'StarClass' in log:
+                        ship['star_class'] = log['StarClass']
+
                     
                 # parse target
                 if log_event == 'FSDTarget':
+                    try:
+                        ship['jumps_remaining'] = log['RemainingJumpsInRoute']
+                    except:
+                        pass
                     if log['Name'] == ship['location']:
                         ship['target'] = None
                     else:
@@ -245,6 +267,9 @@ def ship():
                 logging.exception("Exception occurred")
                 print(e)
 #     logging.debug('ship='+str(ship))
+    if ship['status'] == 'in_space':
+        quit()
+        sleep(1000)
     return ship
 
 
@@ -290,6 +315,7 @@ keys_to_obtain = [
         'PitchUpButton',
         'PitchDownButton',
         'SetSpeedZero',
+        'SetSpeed50',
         'SetSpeed100',
         'HyperSuperCombination',
         'UIFocus',
@@ -303,7 +329,10 @@ keys_to_obtain = [
         'HeadLookReset',
         'PrimaryFire',
         'SecondaryFire',
-        'MouseReset'
+        'MouseReset',
+        'Pause',
+        'ExplorationFSSQuit',
+        'ExplorationFSSEnter'
     ]
 
 def get_bindings(keys_to_obtain=keys_to_obtain):
@@ -714,21 +743,24 @@ def filter_orange2(image=None, testing=False):
 
 def filter_blue(image=None, testing=False):
     while True:
-        if testing:
-            hsv = get_screen((1/3)*SCREEN_WIDTH, (1/3)*SCREEN_HEIGHT,(2/3)*SCREEN_WIDTH, (2/3)*SCREEN_HEIGHT)
-        else:
-            hsv = image.copy()
-        # converting from BGR to HSV color space
-        hsv = cv2.cvtColor(hsv, cv2.COLOR_BGR2HSV)
-        # filter Elite UI orange
-        filtered = cv2.inRange(hsv, array([0, 0, 200]), array([180, 100, 255]))
-        if testing:
-            cv2.imshow('Filtered', filtered)
-            if cv2.waitKey(25) & 0xFF == ord('q'):
-                cv2.destroyAllWindows()
+        try:
+            if testing:
+                hsv = get_screen((1/3)*SCREEN_WIDTH, (1/3)*SCREEN_HEIGHT,(2/3)*SCREEN_WIDTH, (2/3)*SCREEN_HEIGHT)
+            else:
+                hsv = image.copy()
+            # converting from BGR to HSV color space
+            hsv = cv2.cvtColor(hsv, cv2.COLOR_BGR2HSV)
+            # filter Elite UI orange
+            filtered = cv2.inRange(hsv, array([0, 0, 200]), array([180, 100, 255]))
+            if testing:
+                cv2.imshow('Filtered', filtered)
+                if cv2.waitKey(25) & 0xFF == ord('q'):
+                    cv2.destroyAllWindows()
+                    break
+            else:
                 break
-        else:
-            break
+        except:
+            pass
     return filtered
 
 
@@ -811,6 +843,8 @@ def get_navpoint_offset(testing=False, last=None):
     global same_last_count, last_last
     navpoint_template = cv2.imread(resource_path("templates/navpoint.png"), cv2.IMREAD_GRAYSCALE)
     navpoint_width, navpoint_height = navpoint_template.shape[::-1]
+    wrongway_template = cv2.imread(resource_path("templates/wrongway.png"), cv2.IMREAD_GRAYSCALE)
+    wrongway_width, wrongway_height = wrongway_template.shape[::-1]
     pt = (0, 0)
     while True:
         compass_image, compass_width, compass_height = get_compass_image()
@@ -821,6 +855,7 @@ def get_navpoint_offset(testing=False, last=None):
         loc = where( match >= threshold)
         for point in zip(*loc[::-1]):
                 pt = point
+
         final_x = (pt[0] + ((1/2)*navpoint_width)) - ((1/2)*compass_width)
         final_y = ((1/2)*compass_height) - (pt[1] + ((1/2)*navpoint_height))
         if testing:
@@ -833,32 +868,40 @@ def get_navpoint_offset(testing=False, last=None):
         else:
             break
     if pt[0] == 0 and pt[1] == 0:
-        if last:
-            if last == last_last:
-                same_last_count = same_last_count + 1
+        wrongway_template = cv2.imread(resource_path("templates/wrongway.png"), cv2.IMREAD_GRAYSCALE)
+        wrongway_width, wrongway_height = wrongway_template.shape[::-1]
+        pt = (0, 0)
+        while True:
+            compass_image, compass_width, compass_height = get_compass_image()
+            mask_blue = filter_blue(compass_image)
+    #         filtered = filter_bright(compass_image)
+            match = cv2.matchTemplate(mask_blue, wrongway_template, cv2.TM_CCOEFF_NORMED)
+            threshold = 0.5
+            loc = where( match >= threshold)
+            for point in zip(*loc[::-1]):
+                    pt = point
+
+            final_x = (pt[0] + ((1/2)*navpoint_width)) - ((1/2)*compass_width)
+            final_y = ((1/2)*compass_height) - (pt[1] + ((1/2)*navpoint_height))
+            
+            final_x = int(27*(final_x/(sqrt(final_x**2+final_y**2))))
+            final_y = int(27*(final_y/(sqrt(final_x**2+final_y**2))))
+            
+            sleep(1)
+            if testing:
+                cv2.rectangle(compass_image, pt, (pt[0] + navpoint_width, pt[1] + navpoint_height), (0,0,255), 2)
+                cv2.imshow('Navpoint Found', compass_image)
+                cv2.imshow('Navpoint Mask', mask_blue)
+                if cv2.waitKey(25) & 0xFF == ord('q'):
+                    cv2.destroyAllWindows()
+                    break
             else:
-                last_last = last
-                same_last_count = 0
-            if same_last_count > 5:
-                same_last_count = 0
-                if random() < .9:
-                    result = {'x': 1, 'y': 100}
-                else:
-                    result = {'x': 100, 'y': 1}
-            else:
-                result = last
-        else:
-            result = None
-    else:
-        result = {'x':final_x, 'y':final_y}
+                break
+    result = {'x':final_x, 'y':final_y}
     logging.debug('get_navpoint_offset='+str(result))
+
     return result
 
-
-# In[219]:
-
-
-# get_navpoint_offset(testing=True)
 
 
 # ### Get destination offset
@@ -873,11 +916,11 @@ def get_destination_offset(testing=False):
     width = (1/3)*SCREEN_WIDTH
     height = (1/3)*SCREEN_HEIGHT
     while True:
-        screen = get_screen((1/3)*SCREEN_WIDTH, (1/3)*SCREEN_HEIGHT,(2/3)*SCREEN_WIDTH, (2/3)*SCREEN_HEIGHT)
+        screen = get_screen((.2)*SCREEN_WIDTH, 0,(.8)*SCREEN_WIDTH, (2/3)*SCREEN_HEIGHT)
         mask_orange = filter_orange2(screen)
 #         equalized = equalize(screen)
         match = cv2.matchTemplate(mask_orange, destination_template, cv2.TM_CCOEFF_NORMED)
-        threshold = 0.2
+        threshold = 0.3
         loc = where( match >= threshold)
         for point in zip(*loc[::-1]):
                 pt = point
@@ -895,9 +938,10 @@ def get_destination_offset(testing=False):
     if pt[0] == 0 and pt[1] == 0:
         result = None
     else:
-        result = {'x':final_x, 'y':final_y}
+        result = {'x':final_x-270, 'y':final_y+380}
     logging.debug('get_destination_offset='+str(result))
     return result
+
 
 
 # In[221]:
@@ -1016,7 +1060,54 @@ def x_angle(point=None):
 
 # In[227]:
 
+def detect_elw():
+    send(keys['ExplorationFSSEnter'])
+    sleep(1)
+    send(keys['SecondaryFire'], hold=5)
+   
+    destination_template = cv2.imread(resource_path("templates/nosignal.png"), cv2.IMREAD_GRAYSCALE)
+    destination_width, destination_height = destination_template.shape[::-1]
+    pt = (0, 0)
+    width = (1/3)*SCREEN_WIDTH
+    height = (1/3)*SCREEN_HEIGHT
+    testing = True
+    while True:
+        screen = get_screen((.4)*SCREEN_WIDTH, (2/3)*SCREEN_HEIGHT ,(3/4)*SCREEN_WIDTH, SCREEN_HEIGHT)
+        mask = filter_blue(screen,testing=True)
+        #equalized = equalize(screen)
+        match = cv2.matchTemplate(mask, destination_template, cv2.TM_CCOEFF_NORMED)
+        threshold = .4
+        loc = where( match >= threshold)
+        for point in zip(*loc[::-1]):
+                pt = point
+        final_x = (pt[0] + ((1/2)*destination_width)) - ((1/2)*width)
+        final_y = ((1/2)*height) - (pt[1] + ((1/2)*destination_height))
+        if testing:
+            cv2.rectangle(screen, pt, (pt[0] + destination_width, pt[1] + destination_height), (0,0,255), 2)
+            cv2.imshow('Destination Found', screen)
+            cv2.imshow('Destination Mask', mask_orange)
+            if cv2.waitKey(25) & 0xFF == ord('q'):
+                cv2.destroyAllWindows()
+                break
+        else:
+            break
+    if pt[0] == 0 and pt[1] == 0:
+        result = None
+    else:
+        result = {'x':final_x-270, 'y':final_y+380}
+    logging.debug('get_destination_offset='+str(result))
+    return result
+    '''
+    if match nosignal
+        return
+    else:
+    
+            'ExplorationFSSQuit',
+        
+    input()
+'''
 
+#detect_elw()
 def align():
     logging.debug('align')
     if not (ship()['status'] == 'in_supercruise' or ship()['status'] == 'in_space'):
@@ -1024,93 +1115,100 @@ def align():
         raise Exception('align error 1')
     
     logging.debug('align= speed 100')
-    send(keys['SetSpeed100'])
-    
-    logging.debug('align= avoid sun')
-    while sun_percent() > 5:
-        send(keys['PitchUpButton'], state=1)
-    send(keys['PitchUpButton'], state=0)
-    
-    logging.debug('align= find navpoint')
-    off = get_navpoint_offset()
-    while not off:
-        send(keys['PitchUpButton'], state=1)
+    send(keys['SetSpeed50'])
+    print('coarse align')
+    if not get_destination_offset():
+        logging.debug('align= find navpoint')
         off = get_navpoint_offset()
-    send(keys['PitchUpButton'], state=0)
-    
-    logging.debug('align= crude align')
-    close = 3
-    close_a = 18
-    hold_pitch = 0.350
-    hold_roll = 0.170
-    ang = x_angle(off)
-    while (off['x'] > close and ang > close_a) or           (off['x'] < -close and ang < -close_a) or           (off['y'] > close) or           (off['y'] < -close):
-
-        while (off['x'] > close and ang > close_a) or               (off['x'] < -close and ang < -close_a):
-
-            if off['x'] > close and ang > close:
-                send(keys['RollRightButton'], hold=hold_roll)
-            if off['x'] < -close and ang < -close:
-                send(keys['RollLeftButton'], hold=hold_roll)
-
-            if ship()['status'] == 'starting_hyperspace':
-                return
-            off = get_navpoint_offset(last=off)
-            ang = x_angle(off)
-
+        while not off:
+            send(keys['PitchUpButton'], state=1)
+            off = get_navpoint_offset()
+        send(keys['PitchUpButton'], state=0)
+        
+        logging.debug('align= crude align')
+        close = 10
+        close_a = 18
+        hold_pitch = 0.65
+        hold_roll = 0.30
         ang = x_angle(off)
-        while (off['y'] > close) or               (off['y'] < -close):
-
-            if off['y'] > close:
-                send(keys['PitchUpButton'], hold=hold_pitch)
-            if off['y'] < -close:
-                send(keys['PitchDownButton'], hold=hold_pitch)
-
-            if ship()['status'] == 'starting_hyperspace':
-                return
-            off = get_navpoint_offset(last=off)
+        if ang:
+            t = 5*ang/360
+            if ang > 0:
+                send(keys['RollLeftButton'], hold=t)
+            else:
+                send(keys['RollRightButton'], hold=-t)
             ang = x_angle(off)
+        while ((off['x'] > close and ang > close_a) or           (off['x'] < -close and ang < -close_a) or           (off['y'] > close) or           (off['y'] < -close)) and not get_destination_offset():
             
-        off = get_navpoint_offset(last=off)
-        ang = x_angle(off)
+            while (off['x'] > close and ang > close_a) or               (off['x'] < -close and ang < -close_a):
+
+                if off['x'] > close and ang > close:
+                    send(keys['RollRightButton'], hold=hold_roll)
+                if off['x'] < -close and ang < -close:
+                    send(keys['RollLeftButton'], hold=hold_roll)
+
+                if ship()['status'] == 'starting_hyperspace':
+                    return
+                off = get_navpoint_offset(last=off)
+                ang = x_angle(off)
+                
+
+            ang = x_angle(off)
+            while ((off['y'] > close) or (off['y'] < -close)):
+                if get_destination_offset():
+                    break
+                if off['y'] > close:
+                    send(keys['PitchUpButton'], hold=hold_pitch)
+                if off['y'] < -close:
+                    send(keys['PitchDownButton'], hold=hold_pitch)
+
+                if ship()['status'] == 'starting_hyperspace':
+                    return time.time()
+                off = get_navpoint_offset(last=off)
+                ang = x_angle(off)
+                
+            off = get_navpoint_offset(last=off)
+            ang = x_angle(off)
 
     logging.debug('align= fine align')
+    print('fine align')
+    jumptime = time.time()
+    send(keys['HyperSuperCombination'])
     sleep(0.5)    
-    close = 50
-    hold_pitch = 0.200
-    hold_yaw = 0.400
+    close = 30
+    hold_pitch = 0.150
+    hold_yaw = 0.350
+    off = {'x': 270, 'y':380}
     for i in range(5):
         new = get_destination_offset()
         if new:
             off = new
             break
-        sleep(0.25)
-    if not off:
-        return
-    while (off['x'] > close) or           (off['x'] < -close) or           (off['y'] > close) or           (off['y'] < -close):
-        
-        if off['x'] > close:
-            send(keys['YawRightButton'], hold=hold_yaw)
-        if off['x'] < -close:
-            send(keys['YawLeftButton'], hold=hold_yaw)
-        if off['y'] > close:
-            send(keys['PitchUpButton'], hold=hold_pitch)
-        if off['y'] < -close:
-            send(keys['PitchDownButton'], hold=hold_pitch)
-            
-        if ship()['status'] == 'starting_hyperspace':
-            return
-        
-        for i in range(5):
-            new = get_destination_offset()
-            if new:
-                off = new
-                break
-            sleep(0.25)
-        if not off:
-            return
-    
+        sleep(0.25)   
+    print(off)
+    while (abs(off['x']) > close) or  abs(off['y']) > close:
+        while time.time() - jumptime <20:
+            if off['x'] > close:
+                send(keys['YawRightButton'], hold=hold_yaw)
+            if off['x'] < -close:
+                send(keys['YawLeftButton'], hold=hold_yaw)
+            if off['y'] > close:
+                send(keys['PitchUpButton'], hold=hold_pitch)
+            if off['y'] < -close:
+                send(keys['PitchDownButton'], hold=hold_pitch) 
+            send(keys['SetSpeed100'])
+            if ship()['status'] == 'starting_hyperspace':
+                return jumptime
+            for i in range(5):
+                new = get_destination_offset()
+                if new:
+                    off = new
+                    break
+                sleep(0.25)
+        send(keys['HyperSuperCombination'])
+        align()
     logging.debug('align=complete')
+    return jumptime
 
 
 # In[228]:
@@ -1125,33 +1223,35 @@ def align():
 # In[229]:
 
 
-def jump():
+def jump(jumptime=time.time()):
     logging.debug('jump')
-    tries = 3
-    for i in range(tries):
-        logging.debug('jump= try:'+str(i))
-        if not (ship()['status'] == 'in_supercruise' or ship()['status'] == 'in_space'):
-            logging.error('jump=err1')
-            raise Exception('not ready to jump')
-        sleep(0.5)
-        logging.debug('jump= start fsd')
+    if ship()['status'] == 'in_space':
+        logging.error('jump=err1')
+        raise Exception('not ready to jump')
+    send(keys['SetSpeed100'])
+
+    sleep(0.5)
+    logging.debug('jump= start fsd')
+    print(time.time()-jumptime)
+    if time.time()-jumptime > 16:
         send(keys['HyperSuperCombination'], hold=1)
-        sleep(16)
-        if ship()['status'] != 'starting_hyperspace':
-            logging.debug('jump= misalign stop fsd')
-            send(keys['HyperSuperCombination'], hold=1)
-            sleep(2)
-            align()
-        else:
-            logging.debug('jump= in jump')
-            while ship()['status'] != 'in_supercruise':
-                sleep(1)
-            logging.debug('jump= speed 0')
-            send(keys['SetSpeedZero'])
-            logging.debug('jump=complete')
-            return True
-    logging.error('jump=err2')
-    raise Exception("jump failure")    
+        jumptime = time.time()
+    else:
+        sleep(18-(time.time()-jumptime))
+    if ship()['status'] != 'starting_hyperspace':
+        logging.debug('jump= misalign stop fsd')
+        align()
+    else:
+        logging.debug('jump= in jump')
+        while ship()['status'] != 'in_supercruise':
+            send(keys['SetSpeedZero'], hold = 1)
+            sleep(1)
+        logging.debug('jump= speed 0')
+        send(keys['SetSpeedZero'], hold = 0)
+        logging.debug('jump=complete')
+        print(str(ship()['jumps_remaining'])+" jumps remaining in route")
+        return True
+
 
 
 # In[230]:
@@ -1173,22 +1273,41 @@ def refuel(refuel_threshold=33):
         logging.error('refuel=err1')
         return False
         raise Exception('not ready to refuel')
-        
-    if ship()['fuel_percent'] < refuel_threshold and ship()['star_class'] in scoopable_stars:
+    print("Star Class " + ship()['star_class'])
+    send(keys['SetSpeedZero'], repeat=3)
+
+    #if ship()['fuel_percent'] < refuel_threshold and ship()['star_class'] in scoopable_stars:
+    if ship()['star_class'] in scoopable_stars:
         logging.debug('refuel= start refuel')
+        if ship()['is_scooping']:
+            return True
         send(keys['SetSpeed100'])
     #     while not ship()['is_scooping']:
     #         sleep(1)
-        sleep(4)
+        sleep(3)
         logging.debug('refuel= wait for refuel')
         send(keys['SetSpeedZero'], repeat=3)
+        scooptime = 0
+        send(keys['RollRightButton'], state=1)
+        sleep(2)
+        send(keys['RollRightButton'], state=0)    
         while not ship()['fuel_percent'] == 100:
             sleep(1)
+            scooptime += 1
+            while ship()['guifocus'] != 0:
+                sleep(1)
+            if scooptime > 100:
+                return True
+            if ship()['status'] == 'danger' or ship()['star_class'] not in scoopable_stars:
+                return True
+                #quit()
+            if scooptime in (10,15,20,25,30):
+                send(keys['SetSpeed100'])
+                sleep(1)
+                send(keys['SetSpeedZero'], repeat=3)
+
         logging.debug('refuel=complete')
         return True
-    elif ship()['fuel_percent'] >= refuel_threshold:
-        logging.debug('refuel= not needed')
-        return False
     elif ship()['star_class'] not in scoopable_stars:
         logging.debug('refuel= needed, unsuitable star')
         return False
@@ -1226,23 +1345,27 @@ def get_scanner():
 
 def position(refueled_multiplier=1):
     logging.debug('position')
-    scan = get_scanner()
+    if ship()['star_class'] == 'N' or ship()['star_class'] == 'DC':
+        refueled_multiplier=8
+    scan = 1
     if scan == 1:
         logging.debug('position=scanning')
         send(keys['PrimaryFire'], state=1)
     elif scan == 2:
         logging.debug('position=scanning')
-        send(keys['SecondaryFire'], state=1)
-    send(keys['PitchUpButton'], state=1)
-    sleep(5)
-    send(keys['PitchUpButton'], state=0)
+    send(keys['SecondaryFire'], state=1)
+    send(keys['PitchDownButton'], state=1)
+    sleep(10)
+    send(keys['PitchDownButton'], state=0)
     send(keys['SetSpeed100'])
-    send(keys['PitchUpButton'], state=1)
-    while sun_percent() > 3:
-        sleep(1)
-    sleep(5)
-    send(keys['PitchUpButton'], state=0)
+    #send(keys['PitchUpBputton'], state=1)
+    #while sun_percent() > 3:
+    #    sleep(1)
     sleep(5*refueled_multiplier)
+    send(keys['PitchUpButton'], state=1)
+    sleep(4)
+    send(keys['PitchUpButton'], state=0)
+    #sleep(5*refueled_multiplier)
     if scan == 1:
         logging.debug('position=scanning complete')
         send(keys['PrimaryFire'], state=0)
@@ -1252,7 +1375,17 @@ def position(refueled_multiplier=1):
     logging.debug('position=complete')
     return True
 
-
+def quit():
+    system("Rundll32.exe Powrprof.dll,SetSuspendState Sleep")
+    '''send(keys['Pause'])
+    sleep(1)
+    send(keys['UI_Up'])
+    sleep(1)
+    send(keys['UI_Select'])
+    sleep(16)
+    send(keys['UI_Select'])
+    input()
+    return True'''
 # In[235]:
 
 
@@ -1287,21 +1420,25 @@ def autopilot():
     logging.debug('ship='+str(ship()))
 #     if ship()['target']:
 #         undock()
+    jumptime = time.time()
     while ship()['target']:
-        if ship()['status'] == 'in_space' or ship()['status'] == 'in_supercruise':
-            logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT ALIGN '+179*'-'+'\n'+200*'-')
-            align()
-            logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT JUMP '+180*'-'+'\n'+200*'-')
-            jump()
-            logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT REFUEL '+178*'-'+'\n'+200*'-')
+        if ship()['status'] == 'in_supercruise':
+            logging.info('\n'+'---- AUTOPILOT ALIGN ')
+            
+            logging.info('\n'+'---- AUTOPILOT JUMP ')
+            jump(align())
+            print(str(int(time.time()-jumptime))+ " seconds since last jump")
+            jumptime = time.time()
+            logging.info('\n'+'---- AUTOPILOT REFUEL ')
             refueled = refuel()
-            logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT POSIT '+179*'-'+'\n'+200*'-')
+            logging.info('\n'+'---- AUTOPILOT POSIT ')
             if refueled:
                 position(refueled_multiplier=4)
             else:
-                position(refueled_multiplier=1)
+                position(refueled_multiplier=2)
     send(keys['SetSpeedZero'])
     logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT END '+181*'-'+'\n'+200*'-')
+    #quit()
 
 
 # In[237]:
