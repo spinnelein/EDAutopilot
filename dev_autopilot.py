@@ -40,10 +40,12 @@ from datetime import datetime
 from xml.etree.ElementTree import parse
 import cv2 # see reference 2
 from src.directinput import * # see reference 5
-from pyautogui import size# see reference 6
+from pyautogui import size,press, typewrite# see reference 6
+import pyautogui
 import logging
 import colorlog
 
+pyautogui.FAILSAFE = False
 
 # In[182]:
 
@@ -332,7 +334,8 @@ keys_to_obtain = [
         'MouseReset',
         'Pause',
         'ExplorationFSSQuit',
-        'ExplorationFSSEnter'
+        'ExplorationFSSEnter',
+        'GalaxyMapOpen'
     ]
 
 def get_bindings(keys_to_obtain=keys_to_obtain):
@@ -411,6 +414,7 @@ for key in keys_to_obtain:
 # ### Send input
 
 # In[194]:
+
 
 
 def send(key, hold=None, repeat=1, repeat_delay=None, state=None):
@@ -1109,11 +1113,15 @@ def detect_elw():
 
 #detect_elw()
 def align():
+    if ship()['fuel_percent'] < 5:
+        send(keys['SetSpeedZero'], hold = 1)
+        sys.exit()
     logging.debug('align')
-    if not (ship()['status'] == 'in_supercruise' or ship()['status'] == 'in_space'):
+    if ship()['status'] == 'in_space':
         logging.error('align=err1')
         raise Exception('align error 1')
-    
+    if ship()['status'] == 'starting_hyperspace':
+        return time.time()-10
     logging.debug('align= speed 100')
     send(keys['SetSpeed50'])
     print('coarse align')
@@ -1148,7 +1156,7 @@ def align():
                     send(keys['RollLeftButton'], hold=hold_roll)
 
                 if ship()['status'] == 'starting_hyperspace':
-                    return
+                    return jumptime
                 off = get_navpoint_offset(last=off)
                 ang = x_angle(off)
                 
@@ -1187,7 +1195,7 @@ def align():
         sleep(0.25)   
     print(off)
     while (abs(off['x']) > close) or  abs(off['y']) > close:
-        while time.time() - jumptime <20:
+        while time.time() - jumptime <60:
             if off['x'] > close:
                 send(keys['YawRightButton'], hold=hold_yaw)
             if off['x'] < -close:
@@ -1205,8 +1213,9 @@ def align():
                     off = new
                     break
                 sleep(0.25)
+        send(keys['SetSpeedZero'])
         send(keys['HyperSuperCombination'])
-        align()
+        autopilot()
     logging.debug('align=complete')
     return jumptime
 
@@ -1224,6 +1233,7 @@ def align():
 
 
 def jump(jumptime=time.time()):
+
     logging.debug('jump')
     if ship()['status'] == 'in_space':
         logging.error('jump=err1')
@@ -1276,7 +1286,7 @@ def refuel(refuel_threshold=33):
     print("Star Class " + ship()['star_class'])
     send(keys['SetSpeedZero'], repeat=3)
 
-    if ship()['fuel_percent'] < 5 ship()['star_class'] not in scoopable_stars:
+    if ship()['fuel_percent'] < 5 and ship()['star_class'] not in scoopable_stars:
         quit()
     if ship()['star_class'] in scoopable_stars:
         logging.debug('refuel= start refuel')
@@ -1413,7 +1423,44 @@ def quit():
 # 'in-docking'
 
 # In[236]:
-
+def get_waypoint():
+    with open('route.txt') as f:
+        route = eval(f.readline())
+        nextstop = route.pop(0)
+    if set_waypoint(nextstop) == True:
+        f = open('route.txt', "w")
+        f.write(str(route))
+        f.close()
+        return True
+    else:
+        return False
+    
+def set_waypoint(nextstop):
+        print(nextstop)
+        nextstop
+        send(keys['GalaxyMapOpen'])
+        sleep(2)
+        send(keys['CycleNextPanel'])
+        sleep(1)
+        send(keys['UI_Select'])
+        sleep(1)
+        typewrite(nextstop)
+        sleep(0.5)
+        PressKey(28)
+        sleep(0.5)
+        ReleaseKey(28)
+        sleep(5)
+        send(keys['UI_Right'])
+        sleep(1)
+        send(keys['UI_Select'])
+        sleep(20)
+        send(keys['GalaxyMapOpen'])
+        sleep(5)
+        if ship()['target']:
+            return True
+        else:
+            print('Route plotting failed')
+            sleep(1000)
 
 def autopilot():
     logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT START '+179*'-'+'\n'+200*'-')
@@ -1439,7 +1486,11 @@ def autopilot():
                 position(refueled_multiplier=2)
     send(keys['SetSpeedZero'])
     logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT END '+181*'-'+'\n'+200*'-')
-    quit()
+    if get_waypoint():
+        autopilot()
+    else:
+        quit()
+        sleep(500)
 
 
 # In[237]:
