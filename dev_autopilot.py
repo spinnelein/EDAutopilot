@@ -1426,7 +1426,10 @@ def quit():
 def get_waypoint():
     with open('route.txt') as f:
         route = eval(f.readline())
-        nextstop = route.pop(0)
+        try:
+            nextstop = route.pop(0)
+        except:
+            return False
     if set_waypoint(nextstop) == True:
         f = open('route.txt', "w")
         f.write(str(route))
