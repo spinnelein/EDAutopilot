@@ -27,7 +27,7 @@
 
 import sys
 import datetime
-import np
+#import np
 from os import environ, listdir, system
 from os.path import join, isfile, getmtime, abspath
 from json import loads
@@ -1456,11 +1456,7 @@ def set_waypoint(nextstop):
         sleep(20)
         send(keys['GalaxyMapOpen'])
         sleep(5)
-        if ship()['target']:
-            return True
-        else:
-            print('Route plotting failed')
-            sleep(1000)
+        return True
 
 def autopilot():
     logging.info('\n'+200*'-'+'\n'+'---- AUTOPILOT START '+179*'-'+'\n'+200*'-')
