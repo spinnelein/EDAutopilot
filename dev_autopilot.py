@@ -152,7 +152,19 @@ logging.info('get_latest_log='+str(get_latest_log(PATH_LOG_FILES)))
 
 # In[188]:
 
-
+def getstatus():
+    status = environ['USERPROFILE'] + "\Saved Games\Frontier Developments\Elite Dangerous\status.json"
+    with open(status, encoding="utf-8") as f:
+        line = f.readline()
+        try:
+            status = loads(line)
+            ship = getflags(status['Flags'])
+            ship['guifocus'] = status['GuiFocus']
+            ship['fuel'] = status['Fuel']['FuelMain']
+        except:
+            pass
+    return ship
+    
 def ship():
 
     """Returns a 'status' dict containing relevant game status information (state, fuel, ...)"""
@@ -170,6 +182,7 @@ def ship():
         'fuel_percent': None,
         'is_scooping': False,
         'guifocus': 0,
+        'target_star_class': None
     }
     # Read log line by line and parse data
     status = environ['USERPROFILE'] + "\Saved Games\Frontier Developments\Elite Dangerous\status.json"
@@ -253,6 +266,7 @@ def ship():
                 if log_event == 'FSDTarget':
                     try:
                         ship['jumps_remaining'] = log['RemainingJumpsInRoute']
+                        ship['target_star_class'] =  log['StarClass']
                     except:
                         pass
                     if log['Name'] == ship['location']:
@@ -274,7 +288,49 @@ def ship():
         sleep(1000)
     return ship
 
-
+def getflags(flags):
+    bits = {0:'Docked',
+            1:'Landed',
+            2:'Landing Gear Down',
+            3:'Shields Up',
+            4:'Supercruise',
+            5:'FlightAssist Off',
+            6:'Hardpoints Deployed',
+            7:'In Wing',
+            8:'LightsOn',
+            9:'Cargo Scoop Deployed',
+            10:'Silent Running',
+            11:'Scooping Fuel',
+            12:'Srv Handbrake',
+            13:'Srv using Turret view',
+            14:'Srv Turret retracted (close to ship)',
+            15:'Srv DriveAssist',
+            16:'Fsd MassLocked',
+            17:'Fsd Charging',
+            18:'Fsd Cooldown',
+            19:'Low Fuel ( < 25% )',
+            20:'Over Heating ( > 100% )',
+            21:'Has Lat Long',
+            22:'IsInDanger',
+            23:'Being Interdicted',
+            24:'In MainShip',
+            25:'In Fighter',
+            26:'In SRV',
+            27:'Hud in Analysis mode',
+            28:'Night Vision',
+            29:'Altitude from Average radius',
+            30:'fsdJump',
+            31:'srvHighBeam'}
+    status = {}
+    flags = str(bin(flags)[::-1])
+    flag = 0
+    for a in str(flags):
+        if a == '1':
+            status[bits[flag]] = True
+        else:
+            status[bits[flag]] = False
+        flag += 1
+    return status
 # In[189]:
 
 
@@ -1113,9 +1169,11 @@ def detect_elw():
 
 #detect_elw()
 def align():
-    if ship()['fuel_percent'] < 5:
+    if ship()['fuel_percent'] < 15 and ship()['target_star_class'] not in ['F', 'O', 'G', 'K', 'B', 'A', 'M']:
         send(keys['SetSpeedZero'], hold = 1)
-        sys.exit()
+        print('Out of Gas')
+        sleep(300)
+        mainmenu()
     logging.debug('align')
     if ship()['status'] == 'in_space':
         logging.error('align=err1')
@@ -1285,26 +1343,23 @@ def refuel(refuel_threshold=33):
         raise Exception('not ready to refuel')
     print("Star Class " + ship()['star_class'])
     send(keys['SetSpeedZero'], repeat=3)
-
-    if ship()['fuel_percent'] < 5 and ship()['star_class'] not in scoopable_stars:
-        quit()
     if ship()['star_class'] in scoopable_stars:
         logging.debug('refuel= start refuel')
         if ship()['is_scooping']:
             return True
         send(keys['SetSpeed100'])
+        send(keys['PrimaryFire'], state=1)
     #     while not ship()['is_scooping']:
     #         sleep(1)
         sleep(3)
         logging.debug('refuel= wait for refuel')
         send(keys['SetSpeedZero'], repeat=3)
-        scooptime = 0
         send(keys['RollRightButton'], state=1)
         sleep(2)
+        scooptime = 4
         send(keys['RollRightButton'], state=0)    
+        send(keys['PrimaryFire'], state=0)
         while not ship()['fuel_percent'] == 100:
-            sleep(1)
-            scooptime += 1
             while ship()['guifocus'] != 0:
                 sleep(1)
             if scooptime > 100:
@@ -1315,8 +1370,16 @@ def refuel(refuel_threshold=33):
             if scooptime in (10,15,20,25,30):
                 send(keys['SetSpeed100'])
                 sleep(1)
+                scooptime += 1
                 send(keys['SetSpeedZero'], repeat=3)
-
+            if scooptime == 4:
+                send(keys['ExplorationFSSEnter'])
+                sleep(4)
+                scooptime +=4
+                send(keys['ExplorationFSSQuit'])
+                send(keys['SetSpeedZero'])
+            sleep(1)
+            scooptime += 1
         logging.debug('refuel=complete')
         return True
     elif ship()['star_class'] not in scoopable_stars:
@@ -1367,6 +1430,13 @@ def position(refueled_multiplier=1):
     send(keys['SecondaryFire'], state=1)
     send(keys['PitchDownButton'], state=1)
     sleep(10)
+    if scan == 1:
+        logging.debug('position=scanning complete')
+        send(keys['PrimaryFire'], state=0)
+    elif scan == 2:
+        logging.debug('position=scanning complete')
+        send(keys['SecondaryFire'], state=0)
+    logging.debug('position=complete')
     send(keys['PitchDownButton'], state=0)
     send(keys['SetSpeed100'])
     #send(keys['PitchUpBputton'], state=1)
@@ -1377,13 +1447,7 @@ def position(refueled_multiplier=1):
     sleep(4)
     send(keys['PitchUpButton'], state=0)
     #sleep(5*refueled_multiplier)
-    if scan == 1:
-        logging.debug('position=scanning complete')
-        send(keys['PrimaryFire'], state=0)
-    elif scan == 2:
-        logging.debug('position=scanning complete')
-        send(keys['SecondaryFire'], state=0)
-    logging.debug('position=complete')
+
     return True
 
 def quit():
@@ -1397,6 +1461,17 @@ def quit():
     send(keys['UI_Select'])
     input()
     return True'''
+    
+def mainmenu():
+    send(keys['Pause'])
+    sleep(1)
+    send(keys['UI_Up'])
+    sleep(1)
+    send(keys['UI_Select'])
+    sleep(16)
+    send(keys['UI_Select'])
+    input()
+    return True
 # In[235]:
 
 
@@ -1488,13 +1563,22 @@ def autopilot():
     if get_waypoint():
         autopilot()
     else:
-        quit()
-        sleep(500)
-
-
+        mainmenu()
+        sleep(5000)
+'''
+if __name__ == '__main__':
+    while True:
+        try:
+            autopilot()
+        except:
+            except Exception as exc:
+            print traceback.format_exc()
+            print exc
 # In[237]:
+
 
 
 # sleep(3)
 # autopilot()
 
+'''
